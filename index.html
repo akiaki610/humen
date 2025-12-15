@@ -1,72 +1,82 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8">
-<title>学校発表用 電子譜面</title>
+<meta charset="UTF-8" />
+<title>電子譜面（ジェスチャー操作）</title>
 
-<!-- MediaPipe Hands -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
 <style>
-  body {
-    margin: 0;
-    background: black;
-    overflow: hidden;
-  }
+body {
+  margin: 0;
+  background: black;
+  overflow: hidden;
+}
 
-  #score {
-    width: 100vw;
-    height: 100vh;
-    object-fit: contain;
-  }
+#sheet {
+  width: 100vw;
+  height: 100vh;
+  object-fit: contain;
+}
 
-  #camera {
-    display: none;
-  }
+#debug {
+  position: fixed;
+  bottom: 10px;
+  left: 10px;
+  color: red;
+  font-size: 18px;
+  background: rgba(0,0,0,0.5);
+  padding: 6px;
+}
 
-  #hint {
-    position: fixed;
-    bottom: 12px;
-    left: 12px;
-    color: white;
-    background: rgba(0,0,0,0.6);
-    padding: 10px 14px;
-    border-radius: 10px;
-    font-size: 14px;
-    line-height: 1.4;
-  }
+#tapBtn {
+  position: fixed;
+  bottom: 10px;
+  right: 10px;
+  font-size: 18px;
+  padding: 10px 16px;
+}
 </style>
 </head>
 
 <body>
 
-<img id="score" src="score1.png">
-<video id="camera" autoplay playsinline></video>
-
-<div id="hint">
-右手を高く上げて<br>
-3本指で1秒静止 → 次のページ
-</div>
+<img id="sheet" src="score1.jpg">
+<div id="debug">未検出</div>
+<button id="tapBtn">▶ 次へ</button>
+<video id="video" style="display:none"></video>
 
 <script>
-/* ===== 譜面管理 ===== */
-let page = 1;
-const MAX_PAGE = 10; // ★譜面の最大ページ数に合わせる
+/* ===== 譜面 ===== */
+const pages = [
+  "score1.jpg",
+  "score2.jpg",
+  "score3.jpg"
+];
+let page = 0;
 
-function updateScore() {
-  document.getElementById("score").src = `score${page}.png`;
-}
-
+/* ===== 次ページ ===== */
+let lastMove = 0;
 function nextPage() {
-  if (page < MAX_PAGE) {
-    page++;
-    updateScore();
-    console.log("次ページ:", page);
-  }
+  const now = Date.now();
+  if (now - lastMove < 2000) return;
+  lastMove = now;
+
+  page++;
+  if (page >= pages.length) page = pages.length - 1;
+  document.getElementById("sheet").src = pages[page];
 }
 
-/* ===== MediaPipe Hands 設定 ===== */
+/* タップ保険 */
+document.getElementById("tapBtn").onclick = nextPage;
+
+/* ===== Android対策：先に許可を取る ===== */
+navigator.mediaDevices.getUserMedia({ video: true })
+  .then(stream => stream.getTracks().forEach(t => t.stop()))
+  .catch(()=>{});
+
+/* ===== MediaPipe Hands ===== */
 const hands = new Hands({
   locateFile: file =>
     `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
@@ -74,87 +84,31 @@ const hands = new Hands({
 
 hands.setOptions({
   maxNumHands: 1,
-  modelComplexity: 1,
-  minDetectionConfidence: 0.8,
-  minTrackingConfidence: 0.8
+  modelComplexity: 0,
+  minDetectionConfidence: 0.5,
+  minTrackingConfidence: 0.5
 });
 
-/* ===== 安定判定用変数 ===== */
-let holdStart = null;
-let lastY = null;
-let lockedUntil = 0;
+const debug = document.getElementById("debug");
 
-const HOLD_TIME = 1000;    // 1秒静止
-const MOVE_LIMIT = 0.015; // 微動制限
-const COOLDOWN = 5000;    // 実行後5秒ロック
-
-/* ===== 判定ロジック ===== */
 hands.onResults(results => {
-  if (!results.multiHandLandmarks || !results.multiHandedness) return;
-
-  const now = Date.now();
-  if (now < lockedUntil) return;
-
-  /* 右手のみ認識 */
-  const rightIndex = results.multiHandedness.findIndex(
-    h => h.label === "Right"
-  );
-  if (rightIndex === -1) return;
-
-  const lm = results.multiHandLandmarks[rightIndex];
-
-  const wrist = lm[0];
-  const index = lm[8];
-  const middle = lm[12];
-  const ring = lm[16];
-
-  /* 指が伸びているか */
-  const fingersOK =
-    index.y < lm[6].y &&
-    middle.y < lm[10].y &&
-    ring.y < lm[14].y;
-
-  /* 微動チェック */
-  if (lastY !== null && Math.abs(wrist.y - lastY) > MOVE_LIMIT) {
-    holdStart = null;
-    lastY = wrist.y;
-    return;
-  }
-  lastY = wrist.y;
-
-  /* 上部ゾーン + 静止 */
-  if (wrist.y < 0.15 && fingersOK) {
-    if (!holdStart) holdStart = now;
-
-    if (now - holdStart >= HOLD_TIME) {
-      nextPage();
-      lockedUntil = now + COOLDOWN;
-      holdStart = null;
-    }
+  if (results.multiHandLandmarks &&
+      results.multiHandLandmarks.length > 0) {
+    debug.innerText = "✋ 手を検出！";
+    nextPage();
   } else {
-    holdStart = null;
+    debug.innerText = "未検出";
   }
 });
 
 /* ===== カメラ起動 ===== */
-const camera = new Camera(
-  document.getElementById("camera"),
-  {
-    onFrame: async () => {
-      await hands.send({ image: camera.video });
-    },
-    width: 640,
-    height: 480
-  }
-);
-// ★ Android対策：先に明示的にカメラ許可を取る
-navigator.mediaDevices.getUserMedia({ video: true })
-  .then(stream => {
-    stream.getTracks().forEach(track => track.stop());
-  })
-  .catch(err => {
-    alert("カメラが使用できません: " + err.name);
-  });
+const camera = new Camera(document.getElementById("video"), {
+  onFrame: async () => {
+    await hands.send({ image: video });
+  },
+  width: 640,
+  height: 480
+});
 
 camera.start();
 </script>
