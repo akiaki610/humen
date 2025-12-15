@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>学校発表用 電子譜面</title>
+
+<!-- MediaPipe Hands -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<style>
+  body {
+    margin: 0;
+    background: black;
+    overflow: hidden;
+  }
+
+  #score {
+    width: 100vw;
+    height: 100vh;
+    object-fit: contain;
+  }
+
+  #camera {
+    display: none;
+  }
+
+  #hint {
+    position: fixed;
+    bottom: 12px;
+    left: 12px;
+    color: white;
+    background: rgba(0,0,0,0.6);
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-size: 14px;
+    line-height: 1.4;
+  }
+</style>
+</head>
+
+<body>
+
+<img id="score" src="score1.png">
+<video id="camera" autoplay playsinline></video>
+
+<div id="hint">
+右手を高く上げて<br>
+3本指で1秒静止 → 次のページ
+</div>
+
+<script>
+/* ===== 譜面管理 ===== */
+let page = 1;
+const MAX_PAGE = 10; // ★譜面の最大ページ数に合わせる
+
+function updateScore() {
+  document.getElementById("score").src = `score${page}.png`;
+}
+
+function nextPage() {
+  if (page < MAX_PAGE) {
+    page++;
+    updateScore();
+    console.log("次ページ:", page);
+  }
+}
+
+/* ===== MediaPipe Hands 設定 ===== */
+const hands = new Hands({
+  locateFile: file =>
+    `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+  maxNumHands: 1,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.8,
+  minTrackingConfidence: 0.8
+});
+
+/* ===== 安定判定用変数 ===== */
+let holdStart = null;
+let lastY = null;
+let lockedUntil = 0;
+
+const HOLD_TIME = 1000;    // 1秒静止
+const MOVE_LIMIT = 0.015; // 微動制限
+const COOLDOWN = 5000;    // 実行後5秒ロック
+
+/* ===== 判定ロジック ===== */
+hands.onResults(results => {
+  if (!results.multiHandLandmarks || !results.multiHandedness) return;
+
+  const now = Date.now();
+  if (now < lockedUntil) return;
+
+  /* 右手のみ認識 */
+  const rightIndex = results.multiHandedness.findIndex(
+    h => h.label === "Right"
+  );
+  if (rightIndex === -1) return;
+
+  const lm = results.multiHandLandmarks[rightIndex];
+
+  const wrist = lm[0];
+  const index = lm[8];
+  const middle = lm[12];
+  const ring = lm[16];
+
+  /* 指が伸びているか */
+  const fingersOK =
+    index.y < lm[6].y &&
+    middle.y < lm[10].y &&
+    ring.y < lm[14].y;
+
+  /* 微動チェック */
+  if (lastY !== null && Math.abs(wrist.y - lastY) > MOVE_LIMIT) {
+    holdStart = null;
+    lastY = wrist.y;
+    return;
+  }
+  lastY = wrist.y;
+
+  /* 上部ゾーン + 静止 */
+  if (wrist.y < 0.15 && fingersOK) {
+    if (!holdStart) holdStart = now;
+
+    if (now - holdStart >= HOLD_TIME) {
+      nextPage();
+      lockedUntil = now + COOLDOWN;
+      holdStart = null;
+    }
+  } else {
+    holdStart = null;
+  }
+});
+
+/* ===== カメラ起動 ===== */
+const camera = new Camera(
+  document.getElementById("camera"),
+  {
+    onFrame: async () => {
+      await hands.send({ image: camera.video });
+    },
+    width: 640,
+    height: 480
+  }
+);
+
+camera.start();
+</script>
+
+</body>
+</html>
