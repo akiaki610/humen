@@ -147,6 +147,14 @@ const camera = new Camera(
     height: 480
   }
 );
+// ★ Android対策：先に明示的にカメラ許可を取る
+navigator.mediaDevices.getUserMedia({ video: true })
+  .then(stream => {
+    stream.getTracks().forEach(track => track.stop());
+  })
+  .catch(err => {
+    alert("カメラが使用できません: " + err.name);
+  });
 
 camera.start();
 </script>
